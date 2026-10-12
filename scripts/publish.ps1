@@ -40,36 +40,66 @@ $EnvRoot = Split-Path -Parent $PSScriptRoot
 $env:GIT_SSH_COMMAND = 'ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 ' +
                        '-o ServerAliveInterval=10 -o ServerAliveCountMax=6'
 
+function Invoke-Native {
+    <# Run a native command without letting its stderr terminate the script.
+       git writes progress to stderr, and with $ErrorActionPreference='Stop'
+       PowerShell 5.1 turns that into a terminating error -- which reports a
+       successful push as a failure. Success is the exit code, nothing else. #>
+    param([string]$Command, [string[]]$Arguments)
+    $lines = & $Command @Arguments 2>&1
+    $code = $LASTEXITCODE
+    $lines | ForEach-Object { Write-Host ("    " + [string]$_) }
+    return $code
+}
+
+function Resolve-RemoteName {
+    <# Prefer a configured remote over a raw URL: pushing to a URL leaves the
+       remote-tracking ref stale, which makes a later --force-with-lease fail
+       with "stale info". #>
+    param([string]$Url)
+    foreach ($line in (& git remote -v 2>&1)) {
+        if ([string]$line -match '^(\S+)\s+(\S+)\s+\(push\)$' -and $Matches[2] -eq $Url) {
+            return $Matches[1]
+        }
+    }
+    return $null
+}
+
 Push-Location $EnvRoot
 try {
-    $dirty = @(git status --porcelain)
+    $dirty = @(& git status --porcelain 2>&1)
     if ($dirty.Count -eq 0) {
         Write-Host "  nothing to commit"
     }
     else {
-        Write-Host "  staged changes:"
+        Write-Host "  changes:"
         $dirty | ForEach-Object { Write-Host ("    " + $_) }
 
-        if ($DryRun) {
-            Write-Host "  -DryRun: not committing or pushing"
-            exit 0
+        if ($DryRun) { Write-Host "  -DryRun: not committing or pushing"; exit 0 }
+
+        if ((Invoke-Native -Command 'git' -Arguments @('add', '-A')) -ne 0) {
+            throw "git add failed"
         }
-
-        git add -A
-        git commit -s -m $Message | ForEach-Object { Write-Host ("  " + $_) }
-        if ($LASTEXITCODE -ne 0) { throw "commit failed" }
+        if ((Invoke-Native -Command 'git' -Arguments @('commit', '-s', '-m', $Message)) -ne 0) {
+            throw "git commit failed"
+        }
     }
 
-    if ($DryRun) {
-        Write-Host "  -DryRun: not pushing"
-        exit 0
+    if ($DryRun) { Write-Host "  -DryRun: not pushing"; exit 0 }
+
+    $target = Resolve-RemoteName -Url $Remote
+    if (-not $target) {
+        Write-Warning ("no configured remote matches {0}; pushing the URL directly" -f $Remote)
+        Write-Warning "the remote-tracking ref will stay stale -- expect --force-with-lease to complain"
+        $target = $Remote
     }
 
-    Write-Host ("  pushing HEAD -> {0} {1}" -f $Remote, $Branch)
-    git push --no-verify $Remote ("HEAD:refs/heads/{0}" -f $Branch)
-    if ($LASTEXITCODE -ne 0) { throw "push failed" }
+    Write-Host ("  pushing HEAD -> {0} {1}" -f $target, $Branch)
+    if ((Invoke-Native -Command 'git' -Arguments @('push', '--no-verify', $target, ("HEAD:refs/heads/{0}" -f $Branch))) -ne 0) {
+        throw "push failed"
+    }
 
-    Write-Host ("  done: {0}" -f (git log -1 --format='%h %s'))
+    Write-Host ("  done: {0}" -f (& git log -1 --format='%h %s'))
 }
 finally {
     Pop-Location
