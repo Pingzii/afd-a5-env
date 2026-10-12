@@ -1,0 +1,22 @@
+# 本仓是 Linux 环境快照，统一按 LF 存。
+# 源仓在 Windows 上 checkout 时 core.autocrlf=true，工作树是 CRLF；
+# 这里在提交时归一化成 LF，保证 clone 下来在 Linux 上可直接使用。
+* text=auto eol=lf
+
+# 明确的二进制类型，避免被当成文本转换
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
+*.gz   binary
+*.whl  binary
+*.so   binary
+*.o    binary
+*.a    binary
+*.bin  binary
+*.pt   binary
+*.pth  binary
+*.safetensors binary
