@@ -43,11 +43,20 @@ $env:GIT_SSH_COMMAND = 'ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeou
 function Invoke-Native {
     <# Run a native command without letting its stderr terminate the script.
        git writes progress to stderr, and with $ErrorActionPreference='Stop'
-       PowerShell 5.1 turns that into a terminating error -- which reports a
-       successful push as a failure. Success is the exit code, nothing else. #>
+       PowerShell 5.1 raises a terminating error on that first stderr line --
+       which reports a successful push as a failure. Passing '2>&1' is NOT
+       enough in 5.1; the preference has to be relaxed for the call itself.
+       Success is the exit code, nothing else. #>
     param([string]$Command, [string[]]$Arguments)
-    $lines = & $Command @Arguments 2>&1
-    $code = $LASTEXITCODE
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $lines = & $Command @Arguments 2>&1
+        $code = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $saved
+    }
     $lines | ForEach-Object { Write-Host ("    " + [string]$_) }
     return $code
 }
