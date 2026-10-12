@@ -1,0 +1,25 @@
+# -----------------------------------------------------------------------------------------------------------
+# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+# CANN Open Software License Agreement Version 2.0 (the "License").
+# Please refer to the License for details. You may not use this file except in compliance with the License.
+# THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+# See LICENSE in the root of the software repository for the full text of the License.
+# -----------------------------------------------------------------------------------------------------------
+__all__ = [
+    "CommContextManager",
+    "CommChannelBuilderManager",
+    "QuantMteContextManager",
+    "QUANT_MTE_CONTEXT_ELEM_NUM",
+    "MoeDistributeBuffer",
+    "ElasticBuffer",
+    "EPHandle",
+]
+
+from .comm_context import CommContextManager
+from .moe_distribute_buffer import MoeDistributeBuffer
+from .elastic_buffer import ElasticBuffer, EPHandle
+from .comm_channel_builder_manager import CommChannelBuilderManager
+from .comm_channel_builder_manager import QUANT_MTE_CONTEXT_ELEM_NUM
+from .comm_channel_builder_manager import QuantMteContextManager
