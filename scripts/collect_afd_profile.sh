@@ -19,8 +19,10 @@
 #   --attn-dir D  attention profiler dir (default /tmp/profile/attn)
 #   --ffn-dir  D  ffn profiler dir       (default /tmp/profile/ffn)
 #   --model  M    served model name      (default deepseek-v4)
-#   --log     L   serve log for the profiler-enabled check (default
-#                 /home/s00988495/afd_serve.log)
+#   --log     L   serve log(s) for the profiler-enabled check. May be given
+#                 more than once. Defaults to
+#                 "/tmp/serve_F.log /tmp/serve_A.log /home/s00988495/afd_serve.log"
+#                 (only the paths that exist are read)
 #
 # Requires: bash, curl, python3. Nothing else.
 
@@ -32,7 +34,7 @@ ATTN_API="127.0.0.1:18000"
 ATTN_DIR="/tmp/profile/attn"
 FFN_DIR="/tmp/profile/ffn"
 MODEL="deepseek-v4"
-SERVE_LOG="/home/s00988495/afd_serve.log"
+SERVE_LOG="/tmp/serve_F.log /tmp/serve_A.log /home/s00988495/afd_serve.log"
 DO_LOAD=1
 DO_REPORT=1
 
@@ -46,7 +48,8 @@ while [ $# -gt 0 ]; do
     --attn-dir) ATTN_DIR="$2"; shift ;;
     --ffn-dir)  FFN_DIR="$2"; shift ;;
     --model)  MODEL="$2"; shift ;;
-    --log)    SERVE_LOG="$2"; shift ;;
+    --log)    if [ "${LOG_SET:-0}" -eq 0 ]; then SERVE_LOG="$2"; LOG_SET=1
+              else SERVE_LOG="$SERVE_LOG $2"; fi; shift ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -58,29 +61,77 @@ REQ_JSON="${TMPDIR:-/tmp}/afd_prof_req.json"
 say() { printf '\n=== %s ===\n' "$*"; }
 
 # --------------------------------------------------------------------------
-# 0. pre-check: is the profiler actually enabled?
-#    The profiler is created in the runner __init__ from env vars, so it can
-#    only be turned on BEFORE the process starts. Changing env vars later has
-#    no effect. This check saves a wasted load.
+# 0. pre-check: is AFD's profiler actually enabled?
+#
+#    Two DIFFERENT profilers can appear in the log. Do not confuse them:
+#
+#      vLLM's own   : "Torch profiler enabled. AsyncLLM CPU traces will be
+#                      collected under <dir>"   (vllm/v1/engine/async_llm.py)
+#      AFD's        : "AFD NPU <role> profiler enabled. Traces will be saved
+#                      to: <dir>"               (afd_plugin/compat/npu/profiler.py)
+#
+#    Only AFD's is wired into the NPU model runners, so only AFD's collects the
+#    A2e/E2a kernel timings from the runner schedule. AFD's profiler is created
+#    in the runner __init__ from AFD_NPU_{ATTENTION,FFN}_PROFILER_* variables,
+#    so it can only be turned on BEFORE the process starts. This check saves a
+#    wasted load.
 # --------------------------------------------------------------------------
-say "0. profiler pre-check"
+say "0. AFD profiler pre-check"
 
-if [ -r "$SERVE_LOG" ]; then
-  if grep -qi 'profiler enabled' "$SERVE_LOG"; then
-    grep -i 'profiler enabled' "$SERVE_LOG" | sed 's/^/  /'
-    n_attn=$(grep -ci 'attention profiler enabled' "$SERVE_LOG" || true)
-    n_ffn=$(grep -ci 'ffn profiler enabled' "$SERVE_LOG" || true)
-    [ "$n_attn" -eq 0 ] && echo "  !! attention profiler NOT enabled" >&2
-    [ "$n_ffn"  -eq 0 ] && echo "  !! ffn profiler NOT enabled" >&2
-  else
-    echo "  !! no 'profiler enabled' line in $SERVE_LOG"
-    echo "     The profiler is read from env at process start. Set:"
-    echo "       AFD_NPU_ATTENTION_PROFILER_ENABLE=1 + DIR/WAIT/WARMUP/ACTIVE/..."
-    echo "       AFD_NPU_FFN_PROFILER_ENABLE=1       + DIR/WAIT/WARMUP/ACTIVE/..."
-    echo "     then restart A and F. --report still works on old data."
-  fi
+found_log=0
+n_attn=0
+n_ffn=0
+n_vllm=0
+for lg in $SERVE_LOG; do
+  [ -r "$lg" ] || continue
+  found_log=1
+  echo "  log: $lg"
+  grep 'AFD NPU .*profiler enabled' "$lg" 2>/dev/null | sed 's/^/    /'
+  n_attn=$((n_attn + $(grep -c 'AFD NPU attention profiler enabled' "$lg" 2>/dev/null || true)))
+  n_ffn=$((n_ffn + $(grep -c 'AFD NPU ffn profiler enabled' "$lg" 2>/dev/null || true)))
+  n_vllm=$((n_vllm + $(grep -c 'Torch profiler enabled' "$lg" 2>/dev/null || true)))
+done
+
+if [ "$found_log" -eq 0 ]; then
+  echo "  (none of these logs is readable: $SERVE_LOG)"
+  echo "  pass the right ones with:  --log /path/serve_F.log --log /path/serve_A.log"
+fi
+
+if [ "$n_vllm" -gt 0 ]; then
+  cat >&2 <<'WARN'
+  NOTE: vLLM's OWN profiler is enabled (lines containing "Torch profiler
+        enabled. AsyncLLM CPU traces ..."). That is a DIFFERENT profiler and
+        it is not what this script reads. AFD's profiler is the one wired into
+        the NPU model runners.
+WARN
+fi
+
+if [ "$n_attn" -eq 0 ] || [ "$n_ffn" -eq 0 ]; then
+  cat >&2 <<'HOWTO'
+  !! AFD's profiler is NOT enabled. Expected these lines in the serve logs:
+
+       AFD NPU attention profiler enabled. Traces will be saved to: /tmp/profile/attn
+       AFD NPU ffn profiler enabled. Traces will be saved to: /tmp/profile/ffn
+
+     Add this to the serve script BEFORE the `exec vllm serve` line, for BOTH
+     roles, then restart F and A:
+
+       export AFD_NPU_FFN_PROFILER_ENABLE=1
+       export AFD_NPU_FFN_PROFILER_DIR=/tmp/profile/ffn
+       export AFD_NPU_FFN_PROFILER_WAIT=20          # code default is 2500
+       export AFD_NPU_FFN_PROFILER_WARMUP=2
+       export AFD_NPU_FFN_PROFILER_ACTIVE=20        # must match on both roles
+       export AFD_NPU_FFN_PROFILER_REPEAT=1
+       export AFD_NPU_FFN_PROFILER_SKIP_FIRST=0
+       export AFD_NPU_FFN_PROFILER_WITH_STACK=0
+
+     and the same eight with AFD_NPU_ATTENTION_PROFILER_* / DIR=/tmp/profile/attn
+     on the Attention role.
+
+     --report still works on previously collected data.
+HOWTO
 else
-  echo "  (no readable serve log at $SERVE_LOG; skipping)"
+  echo "  OK: both AFD profilers are enabled (attention=$n_attn ffn=$n_ffn)."
 fi
 
 # --------------------------------------------------------------------------
