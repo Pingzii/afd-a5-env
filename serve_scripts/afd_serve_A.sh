@@ -48,7 +48,10 @@ FFN_PORT="18010"
 AFD_HOST="127.0.0.1"
 AFD_PORT="6239"
 MAX_MODEL_LEN="8192"
-LOG_PATH="/home/s00988495/afd_serve.log"
+# No log path and no stdout redirect here: everything this profile run produces
+# stays under /tmp or under the afd-a5-env checkout. Run the script through
+# scripts/run_afd_profile.sh, or redirect yourself:
+#     nohup bash serve_scripts/afd_serve_A.sh > /tmp/serve_A.log 2>&1 &
 
 export ASCEND_RT_VISIBLE_DEVICES="$ATTN_DEVICES"
 export VLLM_PLUGINS="ascend,afd"
@@ -73,7 +76,6 @@ export AFD_NPU_ATTENTION_PROFILER_WITH_STACK="0"
 # ---- vLLM's own torch profiler -- keep disabled while AFD's is on -------
 #    --profiler-config '{"profiler": "torch", "torch_profiler_dir": "./vllm_profile", "torch_profiler_with_stack": false}' \
 
-: > "$LOG_PATH"
 exec vllm serve "$MODEL_PATH" \
     --served-model-name "$SERVED_MODEL_NAME" \
     --data-parallel-size 4 \
